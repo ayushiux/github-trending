@@ -555,7 +555,8 @@ def _repo_card(repo: dict, profiles: dict, i: int, compact: bool = False) -> str
               <span style="color:#9ca3af;font-size:11px;margin-left:6px;">{a.get('what_it_is','')[:70]}</span>
             </td>
             <td style="padding:8px 10px;text-align:right;white-space:nowrap;">{_person_badges(repo, profiles)}
-              <span style="background:{gain_bg};color:{gain_fg};padding:3px 9px;border-radius:10px;font-weight:800;font-size:12px;margin-left:4px;">+{gain:,}</span></td>
+              <span style="color:#6b7280;font-size:11px;margin-left:5px;">&#11088;{_fmt(repo['total_stars'])}</span>
+              <span style="background:{gain_bg};color:{gain_fg};padding:3px 9px;border-radius:10px;font-weight:800;font-size:12px;margin-left:5px;">+{gain:,}</span></td>
         </tr>"""
 
     top = repo.get("top_person", "")
@@ -572,7 +573,7 @@ def _repo_card(repo: dict, profiles: dict, i: int, compact: bool = False) -> str
         </td>
         <td style="padding:13px 10px;text-align:center;white-space:nowrap;vertical-align:top;">
           <span style="background:{gain_bg};color:{gain_fg};padding:4px 12px;border-radius:12px;font-weight:800;font-size:13px;">+{gain:,}</span>
-          <div style="font-size:11px;color:#9ca3af;margin-top:4px;">{_fmt(repo['total_stars'])} &#9733; &middot; {repo.get('language') or '—'}</div>
+          <div style="font-size:11px;color:#9ca3af;margin-top:4px;">&#11088; {_fmt(repo['total_stars'])} total &middot; {repo.get('language') or '—'}</div>
         </td>
     </tr>"""
 
@@ -622,7 +623,7 @@ def generate_html_report(daily_rel, weekly_rel, monthly_rel, daily_all,
     rel_names = {r["full_name"].lower() for r in daily_rel}
     others = [r for r in daily_all if r["full_name"].lower() not in rel_names][:6]
     other_rows = "".join(
-        f'<tr style="background:{"#ffffff" if i%2==0 else "#f9fafb"};"><td style="padding:7px 12px;"><a href="{r["url"]}" style="color:#6b7280;font-size:12.5px;text-decoration:none;">{r["full_name"]}</a></td><td style="padding:7px 10px;text-align:right;font-size:12px;color:#9ca3af;">+{r["stars_gained"]:,}</td></tr>'
+        f'<tr style="background:{"#ffffff" if i%2==0 else "#f9fafb"};"><td style="padding:7px 12px;"><a href="{r["url"]}" style="color:#6b7280;font-size:12.5px;text-decoration:none;">{r["full_name"]}</a></td><td style="padding:7px 10px;text-align:right;font-size:12px;color:#9ca3af;white-space:nowrap;">&#11088;{_fmt(r["total_stars"])} <span style="color:#6b7280;margin-left:4px;">+{r["stars_gained"]:,}</span></td></tr>'
         for i, r in enumerate(others))
     other_html = f"""<div style="background:#f8fafc;padding:14px 28px;border-left:1px solid #e5e7eb;border-right:1px solid #e5e7eb;">
         <h2 style="margin:0 0 6px;font-size:13px;font-weight:700;color:#9ca3af;">Also Trending (not matched to your profiles)</h2>
