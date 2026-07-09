@@ -1,0 +1,13 @@
+# Personal / runtime — never commit to the public repo
+config.local.json
+output/
+state/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# OS
+.DS_Store
+Thumbs.db
