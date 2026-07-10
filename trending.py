@@ -499,96 +499,101 @@ def attach_analysis(repos: list[dict], analyses: dict, profiles: dict) -> None:
 # ---------------------------------------------------------------------------
 # HTML rendering
 # ---------------------------------------------------------------------------
-_PERSON_COLORS = [("#7c3aed", "#f3e8ff"), ("#db2777", "#fce7f3"),
-                  ("#0284c7", "#e0f2fe"), ("#059669", "#d1fae5")]
-_CAT_COLORS = {
-    "Agents": ("#fee2e2", "#dc2626"), "Coding Tools": ("#e0e7ff", "#4338ca"),
-    "Models": ("#dbeafe", "#2563eb"), "RAG/Search": ("#fef3c7", "#d97706"),
-    "MCP": ("#f3e8ff", "#7c3aed"), "Infra": ("#f1f5f9", "#475569"),
-    "Apps": ("#d1fae5", "#059669"), "Research": ("#fae8ff", "#a21caf"),
-    "Other": ("#f3f4f6", "#6b7280"),
-}
+_ACCENT = "#6366f1"   # single indigo accent
+_NEW_C = "#7c3aed"
+_SURGE_C = "#ea580c"
+_GAIN_HI = "#059669"  # notable gain
+_INK = "#0f172a"
+_SUB = "#475569"
+_MUTE = "#94a3b8"
+_FAINT = "#cbd5e1"
+_LINE = "#eef1f5"
 
 
 def _fmt(n: int) -> str:
     return f"{n/1000:.1f}k" if n >= 1000 else str(n)
 
 
-def _person_badges(repo: dict, profiles: dict) -> str:
-    out = ""
-    for i, name in enumerate(profiles):
+def _relevance(repo: dict, profiles: dict) -> str:
+    parts = []
+    for name in profiles:
         sc = repo["analysis"]["scores"].get(name, {}).get("score", 0)
-        fg, bg = _PERSON_COLORS[i % len(_PERSON_COLORS)]
-        strong = sc >= RELEVANCE_THRESHOLD
-        style = (f"background:{bg};color:{fg};" if strong
-                 else "background:#f3f4f6;color:#9ca3af;")
-        out += (f'<span title="{name.capitalize()}: {sc}" style="{style}'
-                f'padding:2px 7px;border-radius:8px;font-size:10px;font-weight:800;'
-                f'margin-right:3px;">{name[:1].upper()} {sc}</span>')
-    return out
+        if sc >= RELEVANCE_THRESHOLD:
+            parts.append(f'<b style="color:{_SUB};">{name.capitalize()} {sc}</b>')
+        else:
+            parts.append(f'<span style="color:{_MUTE};">{name.capitalize()} {sc}</span>')
+    return f'<span style="color:{_FAINT};"> &middot; </span>'.join(parts)
 
 
-def _cat_chip(cat: str) -> str:
-    bg, fg = _CAT_COLORS.get(cat, _CAT_COLORS["Other"])
-    return (f'<span style="background:{bg};color:{fg};padding:2px 8px;border-radius:8px;'
-            f'font-size:10px;font-weight:700;">{cat}</span>')
+def _meta(repo: dict, show_cat: bool = True) -> str:
+    nov = repo.get("novelty", "")
+    tag = ""
+    if nov == "new":
+        tag = f'<span style="color:{_NEW_C};font-weight:800;">&#9679; NEW</span>'
+    elif nov == "surging":
+        tag = f'<span style="color:{_SURGE_C};font-weight:800;">&#9650; SURGING</span>'
+    cat = f'<span style="color:{_MUTE};">{repo["analysis"].get("category", "Other")}</span>' if show_cat else ""
+    sep = "&nbsp;&nbsp;" if tag and cat else ""
+    return f"{tag}{sep}{cat}"
 
 
-def _repo_card(repo: dict, profiles: dict, i: int, compact: bool = False) -> str:
-    a = repo["analysis"]
-    name = repo["full_name"]
-    bg = "#ffffff" if i % 2 == 0 else "#f9fafb"
+def _metrics(repo: dict) -> str:
     gain = repo["stars_gained"]
-    gain_bg, gain_fg = (("#fef3c7", "#92400e") if gain >= 1000
-                        else ("#d1fae5", "#065f46") if gain >= 300 else ("#eff6ff", "#1e40af"))
-    novelty = repo.get("novelty", "")
-    nb = ""
-    if novelty == "new":
-        nb = '<span style="background:#7c3aed;color:#fff;padding:2px 7px;border-radius:8px;font-size:10px;font-weight:800;margin-right:4px;">&#128308; NEW</span>'
-    elif novelty == "surging":
-        nb = '<span style="background:#ea580c;color:#fff;padding:2px 7px;border-radius:8px;font-size:10px;font-weight:800;margin-right:4px;">&#128293; SURGING</span>'
+    gc = _GAIN_HI if gain >= 500 else _SUB
+    return (f'<div style="font-size:15px;font-weight:800;color:{gc};">+{gain:,}</div>'
+            f'<div style="font-size:11.5px;color:{_MUTE};margin-top:3px;">&#11088; {_fmt(repo["total_stars"])}</div>'
+            f'<div style="font-size:11px;color:{_FAINT};margin-top:2px;">{repo.get("language") or ""}</div>')
 
-    if compact:
-        return f"""<tr style="background:{bg};border-bottom:1px solid #f3f4f6;">
-            <td style="padding:8px 12px;">
-              <a href="{repo['url']}" style="color:#111827;font-weight:600;font-size:13px;text-decoration:none;">{name}</a>
-              <span style="color:#9ca3af;font-size:11px;margin-left:6px;">{a.get('what_it_is','')[:70]}</span>
-            </td>
-            <td style="padding:8px 10px;text-align:right;white-space:nowrap;">{_person_badges(repo, profiles)}
-              <span style="color:#6b7280;font-size:11px;margin-left:5px;">&#11088;{_fmt(repo['total_stars'])}</span>
-              <span style="background:{gain_bg};color:{gain_fg};padding:3px 9px;border-radius:10px;font-weight:800;font-size:12px;margin-left:5px;">+{gain:,}</span></td>
-        </tr>"""
 
-    top = repo.get("top_person", "")
-    reason = a["scores"].get(top, {}).get("reason", "") if top else ""
-    reason_html = (f'<div style="color:#4b5563;font-size:12px;margin-top:5px;line-height:1.45;">'
-                   f'<b style="color:#7c3aed;">&rarr; {top.capitalize()}:</b> {reason}</div>') if reason else ""
-    return f"""<tr style="background:{bg};border-bottom:1px solid #f3f4f6;">
-        <td style="padding:13px 14px;">
-          <div style="margin-bottom:4px;">{nb}{_cat_chip(a.get('category','Other'))}</div>
-          <a href="{repo['url']}" style="color:#111827;font-weight:700;font-size:14px;text-decoration:none;">{name}</a>
-          <div style="color:#374151;font-size:12.5px;margin-top:3px;line-height:1.45;">{a.get('what_it_is','')}</div>
-          {reason_html}
-          <div style="margin-top:6px;">{_person_badges(repo, profiles)}</div>
-        </td>
-        <td style="padding:13px 10px;text-align:center;white-space:nowrap;vertical-align:top;">
-          <span style="background:{gain_bg};color:{gain_fg};padding:4px 12px;border-radius:12px;font-weight:800;font-size:13px;">+{gain:,}</span>
-          <div style="font-size:11px;color:#9ca3af;margin-top:4px;">&#11088; {_fmt(repo['total_stars'])} total &middot; {repo.get('language') or '—'}</div>
-        </td>
+def _row(repo: dict, profiles: dict, show_why: bool = False, show_cat: bool = True) -> str:
+    a = repo["analysis"]
+    why = ""
+    if show_why:
+        top = repo.get("top_person", "")
+        reason = a["scores"].get(top, {}).get("reason", "") if top else ""
+        if reason:
+            why = (f'<div style="color:{_SUB};font-size:12.5px;margin-top:6px;line-height:1.5;'
+                   f'border-left:2px solid {_LINE};padding-left:10px;">{reason}</div>')
+    meta = _meta(repo, show_cat)
+    meta_html = (f'<div style="font-size:10px;letter-spacing:.6px;text-transform:uppercase;margin-bottom:5px;">{meta}</div>'
+                 if meta else "")
+    return f"""<tr>
+      <td style="padding:15px 12px 15px 0;border-top:1px solid {_LINE};vertical-align:top;">
+        {meta_html}
+        <a href="{repo['url']}" style="color:{_INK};font-weight:700;font-size:15px;text-decoration:none;">{repo['full_name']}</a>
+        <div style="color:{_SUB};font-size:13px;margin-top:4px;line-height:1.5;">{a.get('what_it_is','')}</div>
+        {why}
+        <div style="margin-top:7px;font-size:11.5px;">{_relevance(repo, profiles)}</div>
+      </td>
+      <td style="padding:15px 0 15px 14px;border-top:1px solid {_LINE};text-align:right;vertical-align:top;white-space:nowrap;">
+        {_metrics(repo)}
+      </td>
     </tr>"""
 
 
-def _table(rows: str) -> str:
-    return f'<table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;"><tbody>{rows}</tbody></table>'
+def _compact_row(repo: dict) -> str:
+    """Ultra-light row for context lists (week / month)."""
+    a = repo["analysis"]
+    gain = repo["stars_gained"]
+    gc = _GAIN_HI if gain >= 500 else _SUB
+    return f"""<tr>
+      <td style="padding:9px 12px 9px 0;border-top:1px solid {_LINE};">
+        <a href="{repo['url']}" style="color:{_INK};font-weight:600;font-size:13px;text-decoration:none;">{repo['full_name']}</a>
+        <span style="color:{_MUTE};font-size:11.5px;margin-left:8px;">{a.get('what_it_is','')[:60]}</span>
+      </td>
+      <td style="padding:9px 0 9px 12px;border-top:1px solid {_LINE};text-align:right;white-space:nowrap;color:{_MUTE};font-size:11.5px;">
+        &#11088;{_fmt(repo['total_stars'])} <b style="color:{gc};margin-left:6px;">+{gain:,}</b>
+      </td>
+    </tr>"""
 
 
-def _section(title: str, repos: list[dict], profiles: dict, compact: bool = False) -> str:
-    if not repos:
+def _panel(title: str, count: str, inner: str) -> str:
+    if not inner:
         return ""
-    rows = "".join(_repo_card(r, profiles, i, compact) for i, r in enumerate(repos))
-    return f"""<div style="background:#ffffff;padding:18px 28px 6px;border-left:1px solid #e5e7eb;border-right:1px solid #e5e7eb;border-top:2px solid #f3f4f6;">
-        <h2 style="margin:0 0 10px;font-size:16px;font-weight:800;color:#111827;">{title}</h2>
-        {_table(rows)}
+    cnt = f'<span style="color:{_FAINT};font-weight:600;font-size:12px;margin-left:8px;">{count}</span>' if count else ""
+    return f"""<div style="padding:4px 26px;">
+      <h2 style="margin:26px 0 0;font-size:12px;font-weight:800;color:{_INK};text-transform:uppercase;letter-spacing:1.2px;">{title}{cnt}</h2>
+      <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">{inner}</table>
     </div>"""
 
 
@@ -598,7 +603,12 @@ def generate_html_report(daily_rel, weekly_rel, monthly_rel, daily_all,
     surging = [r for r in daily_rel if r.get("novelty") == "surging"]
     recurring = [r for r in daily_rel if r.get("novelty") == "recurring"]
 
-    # By-category grouping for recurring relevant
+    new_html = _panel("New today", str(len(new)),
+                      "".join(_row(r, profiles, show_why=True) for r in new))
+    surge_html = _panel("Surging", str(len(surging)),
+                        "".join(_row(r, profiles, show_why=True) for r in surging))
+
+    # Recurring relevant, grouped by category (tight, no per-repo reason)
     cat_html = ""
     if recurring:
         groups: dict[str, list] = {}
@@ -607,67 +617,65 @@ def generate_html_report(daily_rel, weekly_rel, monthly_rel, daily_all,
         blocks = ""
         for cat in CATEGORIES:
             if cat in groups:
-                rows = "".join(_repo_card(r, profiles, i, compact=True) for i, r in enumerate(groups[cat]))
-                blocks += f'<div style="margin-bottom:6px;"><div style="font-size:12px;font-weight:800;color:#6b7280;text-transform:uppercase;letter-spacing:.5px;margin:10px 0 4px;">{cat}</div>{_table(rows)}</div>'
-        cat_html = f"""<div style="background:#ffffff;padding:18px 28px 6px;border-left:1px solid #e5e7eb;border-right:1px solid #e5e7eb;border-top:2px solid #f3f4f6;">
-            <h2 style="margin:0 0 6px;font-size:16px;font-weight:800;color:#111827;">&#128193; Still Relevant &mdash; by Category</h2>
-            {blocks}</div>"""
+                rows = "".join(_row(r, profiles, show_why=False, show_cat=False) for r in groups[cat])
+                blocks += (f'<div style="font-size:10.5px;font-weight:800;color:{_MUTE};'
+                           f'text-transform:uppercase;letter-spacing:1px;margin:18px 0 0;">{cat} '
+                           f'<span style="color:{_FAINT};">{len(groups[cat])}</span></div>'
+                           f'<table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">{rows}</table>')
+        cat_html = f"""<div style="padding:4px 26px;">
+          <h2 style="margin:26px 0 0;font-size:12px;font-weight:800;color:{_INK};text-transform:uppercase;letter-spacing:1.2px;">Explore by category</h2>
+          {blocks}</div>"""
 
-    # Weekly / monthly context (compact, relevant only)
-    wm_rows = "".join(_repo_card(r, profiles, i, compact=True) for i, r in enumerate((weekly_rel + monthly_rel)[:12]))
-    wm_html = f"""<div style="background:#f8fafc;padding:16px 28px;border-left:1px solid #e5e7eb;border-right:1px solid #e5e7eb;border-top:2px solid #f3f4f6;">
-        <h2 style="margin:0 0 8px;font-size:14px;font-weight:700;color:#9ca3af;">&#128200; This Week / Month (context)</h2>
-        {_table(wm_rows)}</div>""" if wm_rows else ""
+    # Week / month context — relevant repos not already shown today
+    shown = {r["full_name"].lower() for r in daily_rel}
+    seen_wm, wm_unique = set(), []
+    for r in weekly_rel + monthly_rel:
+        k = r["full_name"].lower()
+        if k not in shown and k not in seen_wm:
+            seen_wm.add(k)
+            wm_unique.append(r)
+    wm_html = _panel("This week &amp; month", str(len(wm_unique)),
+                     "".join(_compact_row(r) for r in wm_unique[:18]))
 
-    # Also trending (non-relevant top gainers)
-    rel_names = {r["full_name"].lower() for r in daily_rel}
-    others = [r for r in daily_all if r["full_name"].lower() not in rel_names][:6]
+    # Also trending (non-relevant) — minimal
+    others = [r for r in daily_all if r["full_name"].lower() not in shown][:5]
     other_rows = "".join(
-        f'<tr style="background:{"#ffffff" if i%2==0 else "#f9fafb"};"><td style="padding:7px 12px;"><a href="{r["url"]}" style="color:#6b7280;font-size:12.5px;text-decoration:none;">{r["full_name"]}</a></td><td style="padding:7px 10px;text-align:right;font-size:12px;color:#9ca3af;white-space:nowrap;">&#11088;{_fmt(r["total_stars"])} <span style="color:#6b7280;margin-left:4px;">+{r["stars_gained"]:,}</span></td></tr>'
-        for i, r in enumerate(others))
-    other_html = f"""<div style="background:#f8fafc;padding:14px 28px;border-left:1px solid #e5e7eb;border-right:1px solid #e5e7eb;">
-        <h2 style="margin:0 0 6px;font-size:13px;font-weight:700;color:#9ca3af;">Also Trending (not matched to your profiles)</h2>
-        {_table(other_rows)}</div>""" if other_rows else ""
+        f'<tr><td style="padding:8px 12px 8px 0;border-top:1px solid {_LINE};"><a href="{r["url"]}" style="color:{_MUTE};font-size:12.5px;text-decoration:none;">{r["full_name"]}</a></td>'
+        f'<td style="padding:8px 0 8px 12px;border-top:1px solid {_LINE};text-align:right;white-space:nowrap;color:{_FAINT};font-size:11.5px;">&#11088;{_fmt(r["total_stars"])} <span style="color:{_MUTE};">+{r["stars_gained"]:,}</span></td></tr>'
+        for r in others)
+    other_html = _panel("Also trending", "", other_rows)
 
     summary_html = ""
     if summary_text:
-        summary_html = f"""<div style="background:#ffffff;padding:18px 28px;border-left:1px solid #e5e7eb;border-right:1px solid #e5e7eb;">
-            <div style="background:linear-gradient(135deg,#faf5ff,#eff6ff);border:1px solid #e9d5ff;border-radius:12px;padding:16px 18px;">
-              <div style="font-size:12px;font-weight:800;color:#7c3aed;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;">&#10024; Today's Briefing</div>
-              <div style="font-size:13.5px;color:#374151;line-height:1.55;">{summary_text}</div>
-            </div></div>"""
+        summary_html = f"""<div style="padding:20px 26px 2px;">
+          <div style="background:#f8fafc;border-left:3px solid {_ACCENT};border-radius:0 10px 10px 0;padding:14px 16px;">
+            <div style="font-size:10.5px;font-weight:800;color:{_ACCENT};letter-spacing:1px;text-transform:uppercase;margin-bottom:6px;">Today's briefing</div>
+            <div style="font-size:13.5px;color:#334155;line-height:1.6;">{summary_text}</div>
+          </div></div>"""
 
-    top_gainer = max(daily_rel, key=lambda r: r["stars_gained"], default=None)
-    top_name = top_gainer["full_name"].split("/")[-1] if top_gainer else "—"
-    recent_html = ""
-    if recent_links:
-        recent_html = " &middot; ".join(recent_links)
+    recent_html = " &middot; ".join(recent_links) if recent_links else ""
+    people = " &amp; ".join(n.capitalize() for n in profiles)
 
     return f"""<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
-<body style="margin:0;padding:0;background:#f8fafc;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;">
-<div style="max-width:760px;margin:0 auto;padding:24px 14px;">
-  <div style="background:linear-gradient(135deg,#7c3aed,#a855f7,#c084fc);border-radius:16px 16px 0 0;padding:30px 28px 24px;text-align:center;">
-    <div style="font-size:30px;">&#128293;</div>
-    <h1 style="margin:6px 0 0;color:#fff;font-size:22px;font-weight:800;">GitHub Trending &mdash; for Sumeet &amp; Ayushi</h1>
-    <p style="margin:6px 0 0;color:rgba(255,255,255,.85);font-size:13px;">{report_date}</p>
-    <a href="{PAGES_URL}" style="display:inline-block;margin-top:14px;background:#fff;color:#7c3aed;padding:9px 20px;border-radius:20px;font-weight:800;font-size:13px;text-decoration:none;">&#128241; Open on your phone</a>
-  </div>
-  <div style="background:#ffffff;padding:20px 28px 8px;border-left:1px solid #e5e7eb;border-right:1px solid #e5e7eb;">
-    <table width="100%"><tr>
-      <td width="33%" style="text-align:center;"><div style="background:#faf5ff;border-radius:12px;padding:14px 6px;"><div style="font-size:26px;font-weight:800;color:#7c3aed;">{len(daily_rel)}</div><div style="font-size:10px;color:#7c3aed;text-transform:uppercase;">Relevant Today</div></div></td>
-      <td width="33%" style="text-align:center;"><div style="background:#eff6ff;border-radius:12px;padding:14px 6px;"><div style="font-size:26px;font-weight:800;color:#2563eb;">{len(new)}</div><div style="font-size:10px;color:#2563eb;text-transform:uppercase;">New Today</div></div></td>
-      <td width="33%" style="text-align:center;"><div style="background:#fef3c7;border-radius:12px;padding:14px 6px;"><div style="font-size:15px;font-weight:800;color:#92400e;line-height:1.3;">{top_name}</div><div style="font-size:10px;color:#92400e;text-transform:uppercase;">Top Gainer</div></div></td>
-    </tr></table>
-  </div>
-  {summary_html}
-  {_section("&#128308; New Today", new, profiles)}
-  {_section("&#128293; Surging", surging, profiles)}
-  {cat_html}
-  {wm_html}
-  {other_html}
-  <div style="background:#faf5ff;border-radius:0 0 16px 16px;padding:18px 28px;border:1px solid #e5e7eb;border-top:none;text-align:center;">
-    <p style="margin:0;font-size:12px;color:#6b7280;">&#129302; Analyzed & scored against your profiles &middot; <a href="{PAGES_URL}" style="color:#7c3aed;">web version</a></p>
-    <p style="margin:6px 0 0;font-size:11px;color:#9ca3af;">Recent: {recent_html}</p>
+<body style="margin:0;padding:0;background:#f1f5f9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;">
+<div style="max-width:600px;margin:0 auto;padding:20px 12px 40px;">
+  <div style="background:#ffffff;border-radius:16px;overflow:hidden;border:1px solid #e6e9ee;box-shadow:0 1px 3px rgba(15,23,42,.06);">
+    <div style="background:#0f172a;padding:26px 26px 22px;">
+      <div style="color:#a5b4fc;font-size:10.5px;font-weight:700;letter-spacing:2px;text-transform:uppercase;">GitHub Trending</div>
+      <div style="color:#ffffff;font-size:20px;font-weight:800;margin-top:5px;">Your AI &amp; agent radar</div>
+      <div style="color:#94a3b8;font-size:12.5px;margin-top:5px;">{report_date} &nbsp;&middot;&nbsp; {len(daily_rel)} relevant &nbsp;&middot;&nbsp; {len(new)} new &nbsp;&middot;&nbsp; {people}</div>
+      <a href="{PAGES_URL}" style="display:inline-block;margin-top:15px;background:{_ACCENT};color:#fff;padding:9px 18px;border-radius:10px;font-weight:700;font-size:13px;text-decoration:none;">Open on your phone &rarr;</a>
+    </div>
+    {summary_html}
+    {new_html}
+    {surge_html}
+    {cat_html}
+    {wm_html}
+    {other_html}
+    <div style="padding:22px 26px;margin-top:14px;border-top:1px solid {_LINE};text-align:center;">
+      <p style="margin:0;font-size:11.5px;color:{_MUTE};">Analyzed &amp; scored against your profiles &middot; <a href="{PAGES_URL}" style="color:{_ACCENT};text-decoration:none;">web version</a></p>
+      <p style="margin:6px 0 0;font-size:11px;color:{_FAINT};">Recent: {recent_html}</p>
+    </div>
   </div>
 </div></body></html>"""
 
