@@ -312,7 +312,7 @@ REPOSITORY:
 - Description: {repo.get('description') or '(none)'}
 - Language: {repo.get('language') or 'unknown'}
 - Total stars: {repo.get('total_stars', 0)}
-- Stars gained ({repo.get('period', 'daily')}): {repo.get('stars_gained', 0)}
+- Star velocity: +{repo.get('gain_daily', repo.get('stars_gained', 0))} today, +{repo.get('gain_weekly', 0)} this week
 
 First infer what this repository ACTUALLY is and does (use the name + description; do
 not just match keywords). Then score its relevance 0-100 for each person against their
@@ -404,7 +404,7 @@ def exec_summary(client, top_repos: list[dict], profiles: dict[str, str]) -> str
     for r in top_repos[:12]:
         a = r.get("analysis", {})
         sc = " ".join(f"{n[:1].upper()}={a.get('scores', {}).get(n, {}).get('score', 0)}" for n in names)
-        lines.append(f"- {r['full_name']} [{a.get('category','?')}] (+{r['stars_gained']} today, {sc}): {a.get('what_it_is','')}")
+        lines.append(f"- {r['full_name']} [{a.get('category','?')}] (+{r.get('gain_daily', r['stars_gained'])}/day, +{r.get('gain_weekly',0)}/wk, {sc}): {a.get('what_it_is','')}")
     repos_text = "\n".join(lines)
     people = " and ".join(n.capitalize() for n in names)
     try:
@@ -453,30 +453,92 @@ def load_seen() -> dict:
     return {}
 
 
+HISTORY_DAYS = 30
+
+
+def merge_period_gains(daily: list[dict], weekly: list[dict], monthly: list[dict]) -> None:
+    """Attach GitHub's day / week / month star deltas to EVERY repo (keyed by name),
+    so each repo carries its full velocity profile instead of being siloed by period.
+    Star delta is the core 'is this trending' signal — day-by-day and week-by-week."""
+    dy = {r["full_name"].lower(): r["stars_gained"] for r in daily}
+    wk = {r["full_name"].lower(): r["stars_gained"] for r in weekly}
+    mo = {r["full_name"].lower(): r["stars_gained"] for r in monthly}
+    for lst in (daily, weekly, monthly):
+        for r in lst:
+            k = r["full_name"].lower()
+            r["gain_daily"] = dy.get(k, 0)
+            r["gain_weekly"] = wk.get(k, 0)
+            r["gain_monthly"] = mo.get(k, 0)
+
+
+def _pdate(s: str):
+    return datetime.strptime(s, "%Y-%m-%d")
+
+
+def compute_deltas(repos: list[dict], seen: dict, today: str) -> None:
+    """Self-measured star deltas from our OWN run history (persisted total_stars):
+      delta_1d = total_now - total at the most recent prior day
+      delta_7d = total_now - total at the snapshot closest to ~7 days ago
+    This tracks real day-by-day / week-by-week growth (and acceleration) over time,
+    independent of GitHub's trending snapshot."""
+    tdate = _pdate(today)
+    for r in repos:
+        prior = seen.get(r["full_name"]) or {}
+        hist = sorted((h for h in prior.get("history", []) if h.get("date") != today),
+                      key=lambda h: h["date"])
+        total = r.get("total_stars", 0)
+        r["delta_1d"] = None
+        r["delta_7d"] = None
+        if hist:
+            r["delta_1d"] = total - hist[-1]["total"]
+            wk_snap = None
+            for h in hist:
+                if (tdate - _pdate(h["date"])).days >= 5:
+                    wk_snap = h  # latest snapshot that is >= 5 days old
+            if wk_snap:
+                r["delta_7d"] = total - wk_snap["total"]
+
+
 def classify_novelty(daily: list[dict], seen: dict, today: str) -> None:
-    """Tag each daily repo with novelty in-place using PRE-update state."""
+    """NEW = first ever seen. SURGING = accelerating — today's daily delta is well above
+    the repo's recent weekly pace (or its measured 1d delta spikes vs its own history).
+    Else RECURRING. All driven by the star delta."""
     for r in daily:
         prior = seen.get(r["full_name"])
-        gain = r["stars_gained"]
         if prior is None:
             r["novelty"] = "new"
-        else:
-            prior_max = prior.get("max_stars_gained", 0)
-            if gain >= max(400, int(prior_max * 1.6)) and gain >= 200:
-                r["novelty"] = "surging"
-            else:
-                r["novelty"] = "recurring"
+            continue
+        gd = r.get("gain_daily", r.get("stars_gained", 0))
+        gw = r.get("gain_weekly", 0)
+        weekly_pace = gw / 7.0 if gw else 0
+        accel = gd >= 200 and gd >= max(400, weekly_pace * 2.0)
+        d1 = r.get("delta_1d")
+        prev = prior.get("history") or []
+        if d1 is not None and prev:
+            recent = prev[-7:]
+            avg = sum(h.get("gain", 0) for h in recent) / max(len(recent), 1)
+            if d1 >= 200 and d1 >= max(400, avg * 2.0):
+                accel = True
+        r["novelty"] = "surging" if accel else "recurring"
 
 
 def update_seen(daily: list[dict], seen: dict, today: str) -> None:
+    """Persist a bounded per-repo history of total stars (one snapshot per calendar
+    day, idempotent on same-day reruns) so day/week deltas can be measured over time."""
     for r in daily:
         name = r["full_name"]
         prior = seen.get(name, {})
+        gd = r.get("gain_daily", r.get("stars_gained", 0))
+        hist = [h for h in prior.get("history", []) if h.get("date") != today]
+        hist.append({"date": today, "total": r.get("total_stars", 0), "gain": gd})
+        hist = sorted(hist, key=lambda h: h["date"])[-HISTORY_DAYS:]
+        is_new_day = prior.get("last_seen") != today
         seen[name] = {
             "first_seen": prior.get("first_seen", today),
             "last_seen": today,
-            "days_seen": prior.get("days_seen", 0) + 1,
-            "max_stars_gained": max(prior.get("max_stars_gained", 0), r["stars_gained"]),
+            "days_seen": (prior.get("days_seen", 0) + (1 if is_new_day else 0)) or 1,
+            "max_stars_gained": max(prior.get("max_stars_gained", 0), gd),
+            "history": hist,
         }
     SEEN_PATH.write_text(json.dumps(seen, indent=2, ensure_ascii=False), encoding="utf-8")
 
@@ -538,11 +600,16 @@ def _meta(repo: dict, show_cat: bool = True) -> str:
 
 
 def _metrics(repo: dict) -> str:
-    gain = repo["stars_gained"]
-    gc = _GAIN_HI if gain >= 500 else _SUB
-    return (f'<div style="font-size:15px;font-weight:800;color:{gc};">+{gain:,}</div>'
-            f'<div style="font-size:11.5px;color:{_MUTE};margin-top:3px;">&#11088; {_fmt(repo["total_stars"])}</div>'
-            f'<div style="font-size:11px;color:{_FAINT};margin-top:2px;">{repo.get("language") or ""}</div>')
+    gd = repo.get("gain_daily", repo.get("stars_gained", 0))
+    gw = repo.get("gain_weekly", 0)
+    gc = _GAIN_HI if gd >= 500 else _SUB
+    wk = (f'<div style="font-size:11.5px;color:{_MUTE};margin-top:3px;">+{_fmt(gw)} '
+          f'<span style="color:{_FAINT};">this wk</span></div>' if gw else "")
+    return (f'<div style="font-size:16px;font-weight:800;color:{gc};">+{gd:,}</div>'
+            f'<div style="font-size:9px;font-weight:700;color:{_MUTE};letter-spacing:.5px;'
+            f'text-transform:uppercase;">today</div>'
+            f'{wk}'
+            f'<div style="font-size:11px;color:{_FAINT};margin-top:6px;">&#11088; {_fmt(repo["total_stars"])} &middot; {repo.get("language") or ""}</div>')
 
 
 def _row(repo: dict, profiles: dict, show_why: bool = False, show_cat: bool = True) -> str:
@@ -574,15 +641,18 @@ def _row(repo: dict, profiles: dict, show_why: bool = False, show_cat: bool = Tr
 def _compact_row(repo: dict) -> str:
     """Ultra-light row for context lists (week / month)."""
     a = repo["analysis"]
-    gain = repo["stars_gained"]
-    gc = _GAIN_HI if gain >= 500 else _SUB
+    gd = repo.get("gain_daily", repo.get("stars_gained", 0))
+    gw = repo.get("gain_weekly", 0)
+    gc = _GAIN_HI if gd >= 500 else _SUB
+    wk = f' <span style="color:{_FAINT};">+{_fmt(gw)}/wk</span>' if gw else ""
+    day = f'<b style="color:{gc};margin-left:6px;">+{gd:,}/d</b>' if gd else ""
     return f"""<tr>
       <td style="padding:9px 12px 9px 0;border-top:1px solid {_LINE};">
         <a href="{repo['url']}" style="color:{_INK};font-weight:600;font-size:13px;text-decoration:none;">{repo['full_name']}</a>
         <span style="color:{_MUTE};font-size:11.5px;margin-left:8px;">{a.get('what_it_is','')[:60]}</span>
       </td>
       <td style="padding:9px 0 9px 12px;border-top:1px solid {_LINE};text-align:right;white-space:nowrap;color:{_MUTE};font-size:11.5px;">
-        &#11088;{_fmt(repo['total_stars'])} <b style="color:{gc};margin-left:6px;">+{gain:,}</b>
+        &#11088;{_fmt(repo['total_stars'])}{day}{wk}
       </td>
     </tr>"""
 
@@ -781,8 +851,9 @@ def main():
         logger.error("No repos fetched.")
         sys.exit(1)
 
-    # 2. Dedup per period
+    # 2. Dedup per period, then merge day/week/month star deltas onto every repo
     daily_all, weekly_all, monthly_all = dedup_repos(all_repos)
+    merge_period_gains(daily_all, weekly_all, monthly_all)
     logger.info(f"Dedup: {len(daily_all)} daily, {len(weekly_all)} weekly, {len(monthly_all)} monthly")
 
     # 3. LLM analysis on the global unique set (cached), with keyword fallback
@@ -801,16 +872,23 @@ def main():
     for lst in (daily_all, weekly_all, monthly_all):
         attach_analysis(lst, analyses, profiles)
 
-    # 4. Relevance filter
+    # 4. Self-measured deltas from our own history (day-by-day / week-by-week)
+    seen = load_seen()
+    compute_deltas(daily_all + weekly_all + monthly_all, seen, today)
+
+    # 5. Relevance FILTERS; star delta (velocity) RANKS — velocity is the core signal.
     def relevant(lst):
-        return sorted([r for r in lst if r["relevance"] >= RELEVANCE_THRESHOLD],
-                      key=lambda r: (r["relevance"], r["stars_gained"]), reverse=True)
+        return sorted(
+            [r for r in lst if r["relevance"] >= RELEVANCE_THRESHOLD],
+            key=lambda r: (r.get("gain_daily", r["stars_gained"]),
+                           r.get("gain_weekly", 0), r["relevance"]),
+            reverse=True,
+        )
     daily_rel, weekly_rel, monthly_rel = relevant(daily_all), relevant(weekly_all), relevant(monthly_all)
     logger.info(f"Relevant (>= {RELEVANCE_THRESHOLD}): {len(daily_rel)} daily, "
                 f"{len(weekly_rel)} weekly, {len(monthly_rel)} monthly")
 
-    # 5. Novelty (classify with pre-update state, then persist)
-    seen = load_seen()
+    # 6. Novelty by velocity/acceleration (classify pre-update, then persist history)
     classify_novelty(daily_rel, seen, today)
     n_new = sum(1 for r in daily_rel if r["novelty"] == "new")
     n_surge = sum(1 for r in daily_rel if r["novelty"] == "surging")
@@ -833,8 +911,12 @@ def main():
     logger.info(f"Report saved: {report_path}")
 
     for r in daily_rel[:15]:
-        logger.info(f"  [{r.get('novelty','')[:4].upper():4}] +{r['stars_gained']:,} {r['full_name']} "
-                    f"[{r['analysis'].get('category')}] rel={r['relevance']}")
+        d1 = r.get("delta_1d")
+        d7 = r.get("delta_7d")
+        meas = f" | measured Δ1d={d1:+,} Δ7d={d7:+,}" if d1 is not None and d7 is not None else (f" | measured Δ1d={d1:+,}" if d1 is not None else "")
+        logger.info(f"  [{r.get('novelty','')[:4].upper():4}] +{r.get('gain_daily', r['stars_gained']):,}/d "
+                    f"+{r.get('gain_weekly',0):,}/wk {r['full_name']} [{r['analysis'].get('category')}] "
+                    f"rel={r['relevance']}{meas}")
 
     if args.dry_run:
         logger.info("DRY RUN — no email, no publish")
